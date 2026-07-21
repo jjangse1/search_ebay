@@ -840,6 +840,14 @@ function renderResults(){
     const webLink = res.web_search_url
       ? `<div style="margin-top:6px;"><a href="${res.web_search_url}" target="_blank" style="color:var(--teal-dark);font-size:11.5px;">↗ 이 검색어로 eBay 웹에서 직접 확인</a></div>`
       : '';
+    // 구글/빙 가격 조회는 API 없이 검색 링크만 제공 - 클릭하면 새 탭에서 해당
+    // 검색결과(쇼핑 탭 포함 가능)를 직접 보고 가격/링크를 눈으로 확인하는 방식.
+    const googleUrl = `https://www.google.com/search?q=${encodeURIComponent(res.query + ' price')}&tbm=shop`;
+    const bingUrl = `https://www.bing.com/search?q=${encodeURIComponent(res.query + ' price')}`;
+    const extSearchLinks = `<div style="margin-top:2px;">
+      <a href="${googleUrl}" target="_blank" style="color:var(--teal-dark);font-size:11.5px;margin-right:10px;">↗ Google에서 가격 확인</a>
+      <a href="${bingUrl}" target="_blank" style="color:var(--teal-dark);font-size:11.5px;">↗ Bing에서 가격 확인</a>
+    </div>`;
     const warnLine = (res.warnings && res.warnings.length)
       ? `<div style="color:var(--amber);font-size:11px;margin-top:4px;">eBay API 경고: ${escapeHtml(JSON.stringify(res.warnings))}</div>` : '';
     let body = '';
@@ -850,11 +858,11 @@ function renderResults(){
             <span>${escapeHtml(l.currency||'')} ${l.price.toLocaleString()}${l.currency!=='USD' && l.usd_equiv!=null ? ' (&asymp;$'+l.usd_equiv.toLocaleString()+')' : ''} &middot; <a href="${l.itemWebUrl}" target="_blank">보기</a></span>
           </div>`;
     if(res.error){
-      body = `<div class="err-text">오류: ${escapeHtml(res.error)}</div>${webLink}`;
+      body = `<div class="err-text">오류: ${escapeHtml(res.error)}</div>${webLink}${extSearchLinks}`;
     } else if(!res.listings || res.listings.length===0){
       // 진짜로 매물이 하나도 없을 때만 이 메시지 (예전엔 매물이 있어도 USD 통계가
       // 없으면 무조건 이 메시지가 떠서 실제 있는 매물이 화면에서 사라지는 버그가 있었음)
-      body = `<div class="err-text">정확히 일치하는 매물 ${res.total_matching||0}건 (표시 가능한 매물 없음) — 검색어를 더 일반적인 표현으로 조정해 보세요. eBay 웹 화면에 뭔가 나오더라도 품번이 다르면 "관련 상품" 표시일 뿐 실제 일치가 아닙니다.</div>${warnLine}${webLink}`;
+      body = `<div class="err-text">정확히 일치하는 매물 ${res.total_matching||0}건 (표시 가능한 매물 없음) — 검색어를 더 일반적인 표현으로 조정해 보세요. eBay 웹 화면에 뭔가 나오더라도 품번이 다르면 "관련 상품" 표시일 뿐 실제 일치가 아닙니다.</div>${warnLine}${webLink}${extSearchLinks}`;
     } else if(!res.usd_stats){
       // 매물은 있는데(경매만 있거나 환율 변환 실패 등) 시세 통계를 못 낸 경우 -
       // 통계 없이 개별 매물 목록만이라도 보여준다.
@@ -862,7 +870,7 @@ function renderResults(){
         ${mktLine}
         <div class="err-text" style="margin-bottom:8px;">매물 ${res.listings.length}건 찾음 (경매만 있거나 환율 변환 실패로 최저/최고/중앙값 통계는 계산하지 못함) — 아래 개별 매물을 직접 확인하세요.</div>
         ${res.listings.slice(0,8).map(listingRow).join('')}
-        ${webLink}
+        ${webLink}${extSearchLinks}
       `;
     } else {
       const s = res.usd_stats;
@@ -889,7 +897,7 @@ function renderResults(){
         ${s.median_trimmed ? `<div style="font-size:11px;color:var(--muted2);margin-bottom:6px;">매물이 ${s.count}건으로 충분해서, 극단적으로 낮거나 높은 매물 각 1건을 뺀 나머지로 중앙값을 계산했습니다 (더 안정적인 시세 참고용).</div>` : ''}
         ${confNote ? `<div style="font-size:11.5px;color:var(--muted);margin-bottom:8px;">${confNote}</div>` : ''}
         ${res.listings.slice(0,8).map(listingRow).join('')}
-        ${webLink}
+        ${webLink}${extSearchLinks}
       `;
     }
     return `
