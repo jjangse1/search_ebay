@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+.DS_Store
+price_history.db
+dist/
+build/
+*.spec
+app_old.py

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>로그인 · eBay 가격 조회 도구</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Rajdhani:wght@600;700&family=Inter:wght@400;500;600;700&display=swap');
+  :root{
+    --bg:#F7F6F2;
+    --panel:#FFFFFF;
+    --panel2:#FBFAF7;
+    --border:#E7E3D8;
+    --border-soft:#EFEBE0;
+    --text:#22282E;
+    --muted:#767065;
+    --muted2:#A39C8D;
+    --teal:#0EA89A;
+    --teal-dark:#0B8478;
+    --teal-bg:#E6F6F3;
+    --red:#E14B4B;
+    --red-bg:#FCEBEB;
+    --mono:'IBM Plex Mono', ui-monospace, monospace;
+    --disp:'Rajdhani', sans-serif;
+    --body:'Inter', sans-serif;
+    --shadow: 0 1px 2px rgba(30,25,15,.04), 0 10px 30px rgba(30,25,15,.08);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--body);}
+  body{display:flex;align-items:center;justify-content:center;padding:20px;}
+
+  .card{
+    width:100%;max-width:380px;background:var(--panel);border:1px solid var(--border);
+    border-radius:16px;padding:34px 30px 30px;box-shadow:var(--shadow);
+  }
+  .lock-badge{
+    width:44px;height:44px;border-radius:12px;background:var(--teal-bg);border:1px solid var(--teal);
+    display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:16px;
+  }
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--teal-dark);text-transform:uppercase;font-weight:600;margin-bottom:6px;}
+  h1{font-family:var(--disp);font-weight:700;font-size:24px;margin:0 0 6px;letter-spacing:-.01em;}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:26px;line-height:1.6;}
+
+  label{display:block;font-family:var(--mono);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;font-weight:600;}
+  .field{margin-bottom:16px;}
+  input[type=text], input[type=password]{
+    width:100%;background:var(--panel2);border:1px solid var(--border);color:var(--text);
+    font-family:var(--body);font-size:14.5px;padding:12px 14px;border-radius:9px;outline:none;
+  }
+  input[type=text]:focus, input[type=password]:focus{border-color:var(--teal);background:var(--panel);}
+
+  button{
+    width:100%;background:var(--teal);color:#fff;border:none;font-weight:700;
+    padding:12px;border-radius:9px;cursor:pointer;font-size:14.5px;font-family:var(--body);
+    margin-top:6px;box-shadow:0 2px 6px rgba(14,168,154,.28);
+  }
+  button:hover:not(:disabled){background:var(--teal-dark);}
+  button:disabled{opacity:.55;cursor:not-allowed;}
+
+  .error-box{
+    display:none;background:var(--red-bg);border:1px solid var(--red);color:var(--red);
+    font-size:12.5px;padding:9px 12px;border-radius:8px;margin-bottom:16px;
+  }
+  .error-box.show{display:block;}
+
+  .spinner{display:inline-block;width:13px;height:13px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+  <form class="card" id="loginForm" autocomplete="off">
+    <div class="lock-badge">🔒</div>
+    <div class="eyebrow">Berg Semi / myhubon.com</div>
+    <h1>로그인</h1>
+    <div class="sub">이 도구는 내부용입니다. 접근 권한이 있는 아이디/비밀번호로 로그인하세요.</div>
+
+    <div class="error-box" id="errorBox"></div>
+
+    <div class="field">
+      <label for="username">아이디</label>
+      <input type="text" id="username" name="username" autocomplete="username" required>
+    </div>
+    <div class="field">
+      <label for="password">비밀번호</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" required>
+    </div>
+
+    <button type="submit" id="loginBtn">로그인</button>
+  </form>
+
+<script>
+const form = document.getElementById('loginForm');
+const errorBox = document.getElementById('errorBox');
+const btn = document.getElementById('loginBtn');
+
+// 로그인 성공 후 원래 가려던 페이지로 돌아가기 위한 redirect 파라미터 지원
+function getRedirectTarget(){
+  const params = new URLSearchParams(window.location.search);
+  const r = params.get('next');
+  if(r && r.startsWith('/') && !r.startsWith('//')) return r;
+  return '/';
+}
+
+form.addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  errorBox.classList.remove('show');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> 확인 중...';
+
+  const username = document.getElementById('username').value;
+  const password = document.getElementById('password').value;
+
+  try{
+    const r = await fetch('/api/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username, password})
+    });
+    const data = await r.json();
+    if(r.ok && data.ok){
+      window.location.href = getRedirectTarget();
+    } else {
+      errorBox.textContent = data.error || '로그인에 실패했습니다.';
+      errorBox.classList.add('show');
+      btn.disabled = false;
+      btn.textContent = '로그인';
+    }
+  }catch(err){
+    errorBox.textContent = '서버에 연결할 수 없습니다: ' + err.message;
+    errorBox.classList.add('show');
+    btn.disabled = false;
+    btn.textContent = '로그인';
+  }
+});
+</script>
+</body>
+</html>

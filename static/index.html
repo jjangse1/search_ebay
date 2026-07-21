@@ -1,0 +1,936 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>eBay 실시간 가격 조회 도구</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Rajdhani:wght@600;700&family=Inter:wght@400;500;600;700&display=swap');
+  :root{
+    --bg:#F7F6F2;
+    --panel:#FFFFFF;
+    --panel2:#FBFAF7;
+    --border:#E7E3D8;
+    --border-soft:#EFEBE0;
+    --text:#22282E;
+    --muted:#767065;
+    --muted2:#A39C8D;
+    --teal:#0EA89A;
+    --teal-dark:#0B8478;
+    --teal-bg:#E6F6F3;
+    --amber:#DB8A17;
+    --amber-bg:#FBF1DF;
+    --green:#1C9A5B;
+    --green-bg:#E7F6EE;
+    --red:#E14B4B;
+    --red-bg:#FCEBEB;
+    --mono:'IBM Plex Mono', ui-monospace, monospace;
+    --disp:'Rajdhani', sans-serif;
+    --body:'Inter', sans-serif;
+    --shadow: 0 1px 2px rgba(30,25,15,.04), 0 4px 14px rgba(30,25,15,.05);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);}
+  .wrap{max-width:1180px;margin:0 auto;padding:32px 20px 70px;}
+  .brand-eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;color:var(--teal-dark);text-transform:uppercase;margin-bottom:8px;font-weight:600;}
+  h1{font-family:var(--disp);font-weight:700;font-size:30px;margin:0 0 5px;color:var(--text);letter-spacing:-.01em;}
+  .sub{color:var(--muted);font-size:13.5px;margin-bottom:22px;line-height:1.6;}
+
+  .status-pill{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px;padding:6px 13px;border-radius:20px;border:1px solid var(--border);color:var(--muted);background:var(--panel);}
+  .status-pill.ok{color:var(--green);border-color:var(--green);background:var(--green-bg);}
+  .status-pill.err{color:var(--red);border-color:var(--red);background:var(--red-bg);}
+  .dot{width:7px;height:7px;border-radius:50%;background:currentColor;}
+
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:22px;margin-bottom:18px;box-shadow:var(--shadow);}
+  .card-title{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.07em;text-transform:uppercase;margin-bottom:14px;font-weight:600;}
+
+  .drop{border:1.5px dashed var(--border);border-radius:12px;padding:38px 20px;text-align:center;cursor:pointer;color:var(--muted);background:var(--panel2);transition:.15s;}
+  .drop:hover{border-color:var(--teal);color:var(--teal-dark);background:var(--teal-bg);}
+  .drop input{display:none;}
+
+  .toolbar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;}
+  .fx-row{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:13px;color:var(--muted);}
+  .fx-row input{width:80px;background:var(--panel2);border:1px solid var(--border);color:var(--amber);font-family:var(--mono);font-weight:700;padding:6px 9px;border-radius:7px;}
+
+  button{font-family:var(--body);}
+  button.primary{background:var(--teal);color:#fff;border:none;font-weight:700;padding:10px 18px;border-radius:9px;cursor:pointer;font-size:13.5px;box-shadow:0 2px 6px rgba(14,168,154,.28);}
+  button.primary:hover:not(:disabled){background:var(--teal-dark);}
+  button.primary:disabled{opacity:.4;cursor:not-allowed;box-shadow:none;}
+  button.ghost{background:var(--panel);border:1px solid var(--border);color:var(--muted);padding:9px 14px;border-radius:9px;cursor:pointer;font-size:13px;font-weight:500;}
+  button.ghost:hover{color:var(--text);border-color:var(--muted2);}
+  button.danger{background:var(--red-bg);border:1px solid var(--red);color:var(--red);padding:9px 14px;border-radius:9px;cursor:pointer;font-size:13px;font-weight:600;}
+  button.danger:hover:not(:disabled){background:var(--red);color:#fff;}
+  button.danger:disabled{opacity:.35;cursor:not-allowed;}
+  button.icon-del{background:transparent;border:1px solid transparent;color:var(--muted2);width:26px;height:26px;border-radius:7px;cursor:pointer;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;}
+  button.icon-del:hover{background:var(--red-bg);color:var(--red);border-color:var(--red);}
+
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12.5px;}
+  thead th{text-align:left;color:var(--muted);font-weight:600;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;padding:10px 8px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--panel);z-index:5;}
+  tbody td{padding:11px 8px;border-bottom:1px solid var(--border-soft);vertical-align:middle;}
+  tbody tr{cursor:pointer;user-select:none;}
+  tbody tr:hover{background:var(--panel2);}
+  tbody tr.selected{background:var(--teal-bg);}
+  tbody tr.selected:hover{background:#DDF1EC;}
+  .chk-cell{width:34px;}
+  .del-cell{width:34px;text-align:center;}
+  .rowchk{width:18px;height:18px;accent-color:var(--teal);cursor:pointer;}
+  .q-input{width:100%;background:var(--panel2);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:7px 9px;border-radius:7px;cursor:text;}
+  .q-input:focus{outline:none;border-color:var(--teal);}
+  .title-cell{max-width:260px;color:var(--muted);font-size:11.5px;}
+
+  .brand-chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
+  .bchip{border:1px solid var(--border);background:var(--panel2);color:var(--muted);font-family:var(--mono);font-size:12px;padding:7px 13px;border-radius:20px;cursor:pointer;user-select:none;font-weight:500;}
+  .bchip.active{border-color:var(--teal);color:var(--teal-dark);background:var(--teal-bg);}
+  .bchip .n{color:var(--muted2);margin-left:4px;}
+  .bchip.active .n{color:var(--teal-dark);}
+  .drag-hint{font-size:11px;color:var(--muted2);margin-bottom:10px;}
+
+  .progress-track{width:100%;height:6px;background:var(--panel2);border-radius:3px;overflow:hidden;margin-top:12px;display:none;}
+  .progress-track.active{display:block;}
+  .progress-fill{height:100%;width:0%;background:var(--teal);transition:width .25s ease;}
+  .progress-label{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:6px;display:none;}
+  .progress-label.active{display:block;}
+
+  .quick-row{display:flex;gap:10px;}
+  .quick-row input{flex:1;background:var(--panel2);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:15px;padding:12px 14px;border-radius:9px;outline:none;}
+  .quick-row input:focus{border-color:var(--teal);}
+
+  .result-block{margin-top:8px;padding:12px 14px;background:var(--panel2);border:1px solid var(--border-soft);border-radius:10px;}
+  .result-stats{display:flex;gap:16px;flex-wrap:wrap;font-family:var(--mono);font-size:12px;margin-bottom:8px;}
+  .result-stats b{color:var(--amber);}
+  .listing-row{display:flex;justify-content:space-between;gap:10px;font-size:11.5px;padding:5px 0;border-bottom:1px solid var(--border-soft);}
+  .listing-row a{color:var(--teal-dark);text-decoration:none;font-weight:600;}
+  .listing-row a:hover{text-decoration:underline;}
+  .err-text{color:var(--red);font-size:12px;}
+
+  .empty{color:var(--muted2);text-align:center;padding:34px;font-size:13px;}
+  .footer-note{margin-top:24px;font-size:11px;color:var(--muted2);line-height:1.7;border-top:1px solid var(--border);padding-top:14px;}
+  .spinner{display:inline-block;width:13px;height:13px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  /* ---- result tabs ---- */
+  .rtabs{display:flex;gap:4px;margin:2px 0 16px;border-bottom:1px solid var(--border);}
+  .rtab{padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer;color:var(--muted);border:1px solid transparent;border-bottom:none;border-radius:8px 8px 0 0;}
+  .rtab.active{color:var(--teal-dark);background:var(--teal-bg);border-color:var(--border);}
+  .rtabpanel{display:none;}
+  .rtabpanel.active{display:block;}
+
+  /* ---- price trend ---- */
+  .trend-controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px;}
+  .trend-controls select{background:var(--panel2);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12.5px;padding:9px 12px;border-radius:8px;min-width:240px;}
+  .trend-chartbox{background:var(--panel2);border:1px solid var(--border-soft);border-radius:10px;padding:16px;margin-bottom:14px;}
+  .trend-empty{color:var(--muted2);text-align:center;padding:40px 20px;font-size:13px;}
+  .trend-table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px;}
+  .trend-table th{text-align:left;color:var(--muted);font-weight:600;font-size:10px;letter-spacing:.05em;text-transform:uppercase;padding:8px;border-bottom:1px solid var(--border);}
+  .trend-table td{padding:9px 8px;border-bottom:1px solid var(--border-soft);}
+  .trend-note{font-size:11.5px;color:var(--muted2);margin-top:10px;line-height:1.6;}
+  .badge-delta{font-family:var(--mono);font-size:11px;font-weight:700;padding:2px 8px;border-radius:12px;}
+  .badge-delta.up{color:var(--red);background:var(--red-bg);}
+  .badge-delta.down{color:var(--green);background:var(--green-bg);}
+  .badge-delta.flat{color:var(--muted);background:var(--panel);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;">
+    <div>
+      <div class="brand-eyebrow">Berg Semi / myhubon.com &middot; Live eBay Price Check</div>
+      <h1>eBay 실시간 가격 조회 도구</h1>
+      <div class="sub">가격 미등록 항목을 골라 실제 eBay Browse API로 현재 시세를 조회하고, 조회할 때마다 가격 흐름이 자동으로 쌓입니다.</div>
+    </div>
+    <button class="ghost" id="logoutBtn" style="flex-shrink:0;">로그아웃</button>
+  </div>
+
+  <div id="healthPill" class="status-pill">
+    <span class="dot"></span> 서버 연결 확인 중...
+  </div>
+
+  <div class="card" style="margin-top:16px;">
+    <div class="card-title">🌐 조회할 eBay 국가 선택 (여러 개 선택 가능)</div>
+    <div class="brand-chips" id="marketplaceChips"><span style="color:var(--muted2);font-size:12px;">불러오는 중...</span></div>
+    <div class="sub" style="margin-bottom:0;">해외 사이트는 각국 통화로 반환되며, 실시간 환율로 자동 USD/KRW 환산해서 함께 보여줍니다.</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">⚡ 빠른 단일 조회 (엑셀/목록 없이 바로 하나만)</div>
+    <div class="quick-row">
+      <input type="text" id="quickInput" placeholder="예: AMAT 0200-30076 (Enter로도 조회)">
+      <button class="primary" id="quickSearchBtn">조회</button>
+    </div>
+    <div class="progress-label" id="quickProgressLabel"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">1. 엑셀 업로드 (product_list*.xlsx)</div>
+    <div class="drop" id="dropZone">
+      <div id="dropLabel">클릭하거나 파일을 끌어다 놓으세요</div>
+      <input type="file" id="fileInput" accept=".xlsx">
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">1-B. 엑셀 없이 P/N 직접 입력해서 검색 (선택사항)</div>
+    <div class="sub" style="margin-bottom:10px;">엑셀 업로드가 안 될 때 사용하세요. 쉼표(,), 세미콜론(;), 줄바꿈으로 여러 개를 한 번에 넣을 수 있습니다.</div>
+    <textarea id="manualInput" rows="3" placeholder="예: AMAT 0200-30076, TEL 716-078233-002&#10;0200-10157&#10;LAM 15-409222-00" style="width:100%;background:var(--panel2);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:13px;padding:10px 12px;border-radius:9px;resize:vertical;"></textarea>
+    <div style="margin-top:10px;display:flex;gap:8px;">
+      <button class="primary" id="manualAddBtn">목록에 추가</button>
+      <span style="align-self:center;font-family:var(--mono);font-size:11.5px;color:var(--muted2);" id="manualHint"></span>
+    </div>
+  </div>
+
+  <div class="card" id="listCard" style="display:none;">
+    <div class="card-title">2. 검색 대상 목록 (<span id="noPriceCount">0</span>건 중 선택) — 엑셀 가격미등록 항목 + 직접입력 항목</div>
+    <div class="toolbar">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="ghost" id="selAllBtn">전체 선택</button>
+        <button class="ghost" id="selNoneBtn">전체 해제</button>
+        <button class="danger" id="deleteSelectedBtn" disabled>선택 삭제 (<span id="delCount">0</span>)</button>
+      </div>
+      <button class="primary" id="searchBtn" disabled>선택 항목 eBay 조회 (<span id="selCount">0</span>)</button>
+    </div>
+    <div class="progress-track" id="searchProgressTrack"><div class="progress-fill" id="searchProgressFill"></div></div>
+    <div class="progress-label" id="searchProgressLabel"></div>
+    <div class="brand-chips" id="brandFilterChips"></div>
+    <div class="drag-hint">행을 클릭하거나, 클릭한 채로 여러 행 위로 드래그하면 한 번에 선택/해제됩니다. 오른쪽 끝 × 버튼으로 목록에서 바로 제거할 수 있어요.</div>
+    <div style="max-height:440px;overflow-y:auto;position:relative;">
+      <table>
+        <thead>
+          <tr><th class="chk-cell"></th><th>P/N</th><th>Maker</th><th>Condition</th><th>제품명</th><th>검색어 (수정 가능)</th><th class="del-cell"></th></tr>
+        </thead>
+        <tbody id="rowsBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" id="resultsCard" style="display:none;">
+    <div class="toolbar">
+      <div class="card-title" style="margin-bottom:0;">3. eBay 조회 결과 &amp; 가격 추이</div>
+      <div class="fx-row">
+        <span>USD→KRW</span><input type="number" id="fxRate" value="1495">
+        <button class="ghost" id="exportBtn">CSV 다운로드</button>
+      </div>
+    </div>
+
+    <div class="rtabs">
+      <div class="rtab active" data-rtab="current">이번 조회 결과</div>
+      <div class="rtab" data-rtab="trend">📈 가격 추이</div>
+    </div>
+
+    <div class="rtabpanel active" data-rpanel="current">
+      <div id="resultsBody"></div>
+    </div>
+
+    <div class="rtabpanel" data-rpanel="trend">
+      <div class="trend-controls">
+        <select id="trendPartSelect"><option value="">부품 선택...</option></select>
+        <span style="font-family:var(--mono);font-size:11.5px;color:var(--muted2);" id="trendCountLabel"></span>
+      </div>
+      <div id="trendContent"></div>
+      <div class="trend-note">가격 추이는 이 브라우저(이 PC)에 저장됩니다. 같은 부품을 여러 번 조회할수록 기록이 쌓여 그래프가 채워집니다. 다른 PC/브라우저에서는 공유되지 않습니다.</div>
+    </div>
+  </div>
+
+  <div class="footer-note">
+    가격 = eBay Browse API item_summary/search 결과 중 currency=USD 매물 기준 min/max/median.
+    검색어는 "메이커 + P/N" 기본값이며 실제 eBay 리스팅 표기와 다를 수 있어 수정 후 조회를 권장합니다.
+    조회 결과가 0건이면 검색어를 더 일반적인 표현(모델명 등)으로 바꿔 재시도하세요.
+  </div>
+</div>
+
+<script>
+const API = '';
+let noPriceRows = [];
+let lastResults = {}; // row_id -> result
+let selectedIds = new Set();
+let queryOverrides = {}; // row_id -> edited query string
+let activeBrandFilter = new Set(); // empty = show all brands
+let isDragging = false;
+let dragTargetState = true;
+
+document.addEventListener('mouseup', ()=>{ isDragging = false; });
+
+async function checkHealth(){
+  const pill = document.getElementById('healthPill');
+  try{
+    const r = await fetch(API + '/api/parse-excel', {method:'POST', body:new FormData()});
+    // 400(파일없음)이 정상 응답이면 서버는 살아있는 것
+    if(r.status === 400 || r.ok){
+      pill.className = 'status-pill ok';
+      pill.innerHTML = '<span class="dot"></span> 로컬 서버 연결됨 (localhost)';
+    } else {
+      throw new Error('unexpected status');
+    }
+  }catch(e){
+    pill.className = 'status-pill err';
+    pill.innerHTML = '<span class="dot"></span> 서버에 연결할 수 없습니다 — app.py가 실행 중인지 확인하세요';
+  }
+}
+checkHealth();
+
+document.getElementById('logoutBtn').addEventListener('click', async ()=>{
+  try{ await fetch('/api/logout', {method:'POST'}); }catch(e){}
+  window.location.href = '/login';
+});
+
+let selectedMarketplaces = new Set(['EBAY_US']);
+
+async function loadMarketplaces(){
+  const box = document.getElementById('marketplaceChips');
+  try{
+    const r = await fetch(API + '/api/marketplaces');
+    const data = await r.json();
+    selectedMarketplaces = new Set(data.default && data.default.length ? data.default : ['EBAY_US']);
+    const entries = Object.entries(data.marketplaces);
+    box.innerHTML = entries.map(([id, info])=>`
+      <div class="bchip ${selectedMarketplaces.has(id)?'active':''}" data-mkt="${id}">${escapeHtml(info.label)}<span class="n">${escapeHtml(info.currency)}</span></div>
+    `).join('');
+    box.querySelectorAll('.bchip').forEach(chip=>{
+      chip.addEventListener('click', ()=>{
+        const id = chip.getAttribute('data-mkt');
+        if(selectedMarketplaces.has(id)){
+          if(selectedMarketplaces.size===1){ return; } // 최소 1개는 선택돼 있어야 함
+          selectedMarketplaces.delete(id);
+        } else {
+          selectedMarketplaces.add(id);
+        }
+        chip.classList.toggle('active');
+      });
+    });
+  }catch(e){
+    box.innerHTML = '<span style="color:var(--red);font-size:12px;">국가 목록을 불러오지 못했습니다 (서버 연결 확인)</span>';
+  }
+}
+loadMarketplaces();
+
+let manualCounter = -1; // 음수 row_id로 엑셀 row_id(양수)와 충돌 방지
+
+document.getElementById('manualAddBtn').addEventListener('click', ()=>{
+  const raw = document.getElementById('manualInput').value;
+  const parts = raw.split(/[,;\n]+/).map(s=>s.trim()).filter(Boolean);
+  const hint = document.getElementById('manualHint');
+  if(parts.length===0){ hint.textContent = '입력된 항목이 없습니다'; return; }
+
+  parts.forEach(p=>{
+    noPriceRows.push({
+      row_id: manualCounter--,
+      part_no: p,
+      brand: '',
+      conditions: '',
+      product_title: '(직접 입력)'
+    });
+  });
+  document.getElementById('manualInput').value = '';
+  hint.textContent = `${parts.length}건 추가됨 (총 ${noPriceRows.length}건)`;
+  document.getElementById('noPriceCount').textContent = noPriceRows.length;
+  buildBrandChips();
+  renderRows();
+  document.getElementById('listCard').style.display = 'block';
+  document.getElementById('listCard').scrollIntoView({behavior:'smooth'});
+});
+
+let quickCounter = -900000;
+
+// ---------------- price history (서버 SQLite, 팀 전체 공유) ----------------
+async function fetchHistoryParts(){
+  try{
+    const r = await fetch(API + '/api/price-history/parts');
+    if(!r.ok) return [];
+    const data = await r.json();
+    return data.parts || [];
+  }catch(e){ return []; }
+}
+
+async function fetchHistory(partNo){
+  try{
+    const r = await fetch(API + '/api/price-history?part_no=' + encodeURIComponent(partNo));
+    if(!r.ok) return [];
+    const data = await r.json();
+    // 서버 필드명(min_usd/max_usd/median_usd/created_at)을 프론트 렌더링에서 쓰던
+    // 형태(min/max/median/ts)로 맞춰준다.
+    return (data.history || []).map(h=>({
+      id: h.id,
+      ts: Date.parse(h.created_at),
+      brand: h.brand,
+      query: h.query,
+      count: h.count,
+      min: h.min_usd,
+      max: h.max_usd,
+      median: h.median_usd
+    }));
+  }catch(e){ return []; }
+}
+
+async function deleteHistoryEntry(id){
+  try{
+    await fetch(API + '/api/price-history/' + id, {method:'DELETE'});
+  }catch(e){ /* 무시 - 재조회 시 어차피 최신 상태로 갱신됨 */ }
+}
+
+let trendChart = null;
+
+async function populateTrendSelect(preferPartNo){
+  const sel = document.getElementById('trendPartSelect');
+  const parts = await fetchHistoryParts();
+  sel.innerHTML = '<option value="">부품 선택...</option>' + parts.map(p=>
+    `<option value="${escapeHtml(p.part_no)}">${escapeHtml(p.part_no)} (${p.count}회, 최근 $${p.last_median!=null? Math.round(p.last_median).toLocaleString():'-'})</option>`
+  ).join('');
+  const partNos = parts.map(p=>p.part_no);
+  if(preferPartNo && partNos.includes(preferPartNo.toUpperCase())){
+    sel.value = preferPartNo.toUpperCase();
+    await renderTrend(sel.value);
+  }
+}
+document.getElementById('trendPartSelect').addEventListener('change', (e)=> renderTrend(e.target.value));
+
+function fmtDate(ts){
+  const d = new Date(ts);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+}
+
+async function renderTrend(partNo){
+  const box = document.getElementById('trendContent');
+  const label = document.getElementById('trendCountLabel');
+  if(!partNo){
+    box.innerHTML = '<div class="trend-empty">위에서 부품을 선택하면 지금까지 쌓인 가격 기록을 보여드립니다.<br>같은 부품을 여러 번 조회할수록 그래프가 풍성해져요.</div>';
+    label.textContent = '';
+    if(trendChart){ trendChart.destroy(); trendChart = null; }
+    return;
+  }
+  label.textContent = '불러오는 중...';
+  const history = await fetchHistory(partNo);
+  label.textContent = `기록 ${history.length}건`;
+
+  if(history.length===0){
+    box.innerHTML = '<div class="trend-empty">이 부품에 대한 기록이 아직 없습니다.</div>';
+    return;
+  }
+
+  // ---- 요약 통계 (wSemi 스타일 상단 카드) ----
+  const medians = history.map(h=>h.median);
+  const firstTs = history[0].ts;
+  const lastTs = history[history.length-1].ts;
+  const avgMedian = medians.reduce((a,b)=>a+b,0) / medians.length;
+  const lastEntry = history[history.length-1];
+  const allTimeMin = Math.min(...history.map(h=>h.min));
+  const allTimeMax = Math.max(...history.map(h=>h.max));
+
+  const statCards = [
+    ['최초 기록', fmtDate(firstTs).slice(0,10)],
+    ['최근 기록', fmtDate(lastTs).slice(0,10)],
+    ['기록 횟수', history.length + '회'],
+    ['평균 중앙값', '$'+Math.round(avgMedian).toLocaleString()],
+    ['최근 중앙값', '$'+lastEntry.median.toLocaleString()],
+    ['관측 범위', '$'+allTimeMin.toLocaleString()+' ~ $'+allTimeMax.toLocaleString()]
+  ];
+
+  box.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px;">
+      ${statCards.map(([label,val])=>`
+        <div style="background:var(--panel2);border:1px solid var(--border-soft);border-radius:10px;padding:12px 14px;">
+          <div style="font-family:var(--mono);font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">${label}</div>
+          <div style="font-family:var(--mono);font-size:15px;font-weight:700;color:var(--text);">${val}</div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="trend-chartbox"><canvas id="trendCanvas" height="90"></canvas></div>
+    <div style="font-size:11.5px;color:var(--muted2);margin-bottom:8px;">
+      ⓘ 아래 기록은 eBay의 "판매완료(Sold)" 이력이 아니라, <b>우리가 조회한 시점마다의 활성 매물 시세 스냅샷</b>입니다. 같은 부품을 자주 조회할수록 추이가 정확해져요.
+    </div>
+    <table class="trend-table">
+      <thead><tr><th>조회 시각</th><th>검색어</th><th>매물수</th><th>최저</th><th>최고</th><th>중앙값</th><th>전회 대비</th><th></th></tr></thead>
+      <tbody>
+        ${history.map((h,i)=>{
+          const prev = history[i-1]; // 오래된 순 정렬이므로 바로 앞 인덱스가 이전 기록
+          let delta = '';
+          if(prev && prev.median){
+            const diff = h.median - prev.median;
+            const pct = (diff/prev.median*100);
+            if(Math.abs(pct) < 0.5){ delta = '<span class="badge-delta flat">-</span>'; }
+            else if(diff>0){ delta = `<span class="badge-delta up">▲ ${pct.toFixed(1)}%</span>`; }
+            else{ delta = `<span class="badge-delta down">▼ ${Math.abs(pct).toFixed(1)}%</span>`; }
+          }
+          return `<tr>
+            <td>${fmtDate(h.ts)}</td>
+            <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(h.query)}</td>
+            <td>${h.count}</td>
+            <td>$${h.min.toLocaleString()}</td>
+            <td>$${h.max.toLocaleString()}</td>
+            <td><b>$${h.median.toLocaleString()}</b></td>
+            <td>${delta}</td>
+            <td><button class="icon-del" data-delhist="${h.id}" title="이 기록 삭제">✕</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+
+  box.querySelectorAll('[data-delhist]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const id = parseInt(btn.getAttribute('data-delhist'),10);
+      await deleteHistoryEntry(id);
+      const remaining = await fetchHistory(partNo);
+      if(remaining.length===0) populateTrendSelect(); else renderTrend(partNo);
+    });
+  });
+
+  const ctx = document.getElementById('trendCanvas').getContext('2d');
+  if(trendChart) trendChart.destroy();
+  trendChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: history.map(h=>fmtDate(h.ts)),
+      datasets: [
+        {
+          // 밴드의 위쪽 경계선 (최고가) - 선 자체는 안 보이고 아래 데이터셋과의
+          // 색칠된 영역을 만드는 용도
+          label: '최고가',
+          data: history.map(h=>h.max),
+          borderWidth: 0,
+          pointRadius: 0,
+          fill: false
+        },
+        {
+          // 밴드의 아래쪽 경계선 (최저가) - 바로 위 데이터셋(최고가)까지 색을 채워서
+          // "최저~최고 사이 변동폭"이 한눈에 보이는 밴드가 됨
+          label: '가격 변동폭 (최저~최고)',
+          data: history.map(h=>h.min),
+          borderColor: 'rgba(219,138,23,.55)',
+          borderWidth: 1,
+          borderDash: [3,3],
+          pointRadius: 0,
+          backgroundColor: 'rgba(219,138,23,.14)',
+          fill: '-1'
+        },
+        {
+          label: '중앙값 (대표 시세)',
+          data: history.map(h=>h.median),
+          borderColor: '#0EA89A',
+          backgroundColor: '#0EA89A',
+          borderWidth: 2.5,
+          tension: .25,
+          fill: false,
+          pointRadius: 4,
+          pointBackgroundColor: '#0EA89A'
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: {
+          position:'bottom',
+          labels:{
+            font:{ family:'Inter', size:11 },
+            filter: (item)=> item.text !== '최고가' // 밴드 위쪽 경계선은 범례에서 숨김
+          }
+        },
+        tooltip: {
+          callbacks: {
+            label: (ctx)=> `${ctx.dataset.label}: $${ctx.parsed.y.toLocaleString()}`
+          }
+        }
+      },
+      scales: {
+        y: { ticks: { callback: v=>'$'+v.toLocaleString() } },
+        x: { ticks: { font:{ size:10 } } }
+      }
+    }
+  });
+}
+
+// ---------------- result tabs ----------------
+document.querySelectorAll('.rtab').forEach(t=>{
+  t.addEventListener('click', ()=>{
+    document.querySelectorAll('.rtab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.rtabpanel').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    document.querySelector('[data-rpanel="'+t.dataset.rtab+'"]').classList.add('active');
+    if(t.dataset.rtab==='trend') populateTrendSelect();
+  });
+});
+
+async function searchOne(item){
+  try{
+    const r = await fetch(API + '/api/search-ebay', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({items:[item], marketplaces:[...selectedMarketplaces]})
+    });
+    const data = await r.json();
+    if(r.ok && data.results && data.results[0]){
+      lastResults[item.row_id] = data.results[0];
+      // 가격 이력은 서버(/api/search-ebay)에서 usd_stats 계산 시 자동으로
+      // price_history.db에 기록되므로 여기서 따로 호출할 필요 없음.
+    } else {
+      lastResults[item.row_id] = {row_id:item.row_id, query:item.query, error:(data&&data.error)||'알 수 없는 오류'};
+    }
+  }catch(e){
+    lastResults[item.row_id] = {row_id:item.row_id, query:item.query, error:e.message};
+  }
+}
+
+// 여러 건을 순차 조회하면서, 하나 끝날 때마다 바로 결과를 렌더링(점진적 표시) + 진행률 콜백
+async function searchItemsSequentially(items, onProgress){
+  for(let i=0;i<items.length;i++){
+    onProgress(i, items.length);
+    await searchOne(items[i]);
+    renderResults();
+    onProgress(i+1, items.length);
+  }
+}
+
+document.getElementById('quickSearchBtn').addEventListener('click', runQuickSearch);
+document.getElementById('quickInput').addEventListener('keydown', e=>{ if(e.key==='Enter') runQuickSearch(); });
+
+async function runQuickSearch(){
+  const input = document.getElementById('quickInput');
+  const q = input.value.trim();
+  if(!q) return;
+  const btn = document.getElementById('quickSearchBtn');
+  const label = document.getElementById('quickProgressLabel');
+  const rowId = quickCounter--;
+  noPriceRows.push({row_id:rowId, part_no:q, brand:'', conditions:'', product_title:'(빠른 조회)'});
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> 조회 중';
+  label.classList.add('active');
+  label.textContent = 'eBay에 조회 요청 중...';
+
+  document.getElementById('resultsCard').style.display = 'block';
+  document.getElementById('resultsCard').scrollIntoView({behavior:'smooth'});
+
+  await searchOne({row_id: rowId, query: q, part_no: q, brand: ''});
+  renderResults();
+
+  label.textContent = '완료';
+  setTimeout(()=>{ label.classList.remove('active'); }, 1500);
+  btn.disabled = false;
+  btn.innerHTML = '조회';
+  input.value = '';
+}
+
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+dropZone.addEventListener('click', ()=>fileInput.click());
+dropZone.addEventListener('dragover', e=>{e.preventDefault(); dropZone.style.borderColor='#0EA89A';});
+dropZone.addEventListener('dragleave', ()=>{dropZone.style.borderColor='';});
+dropZone.addEventListener('drop', e=>{
+  e.preventDefault();
+  dropZone.style.borderColor='';
+  if(e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', ()=>{
+  if(fileInput.files.length) handleFile(fileInput.files[0]);
+});
+
+async function handleFile(file){
+  document.getElementById('dropLabel').textContent = '업로드 중... ' + file.name;
+  const fd = new FormData();
+  fd.append('file', file);
+  try{
+    const r = await fetch(API + '/api/parse-excel', {method:'POST', body:fd});
+    const data = await r.json();
+    if(!r.ok){ alert('오류: ' + (data.error||'알 수 없는 오류')); return; }
+    document.getElementById('dropLabel').textContent = `${file.name} 업로드 완료 (가격없음 ${data.no_price_count}건 / 가격있음 ${data.priced_count}건)`;
+    noPriceRows = noPriceRows.filter(r=>r.row_id < 0).concat(data.no_price_rows);
+    document.getElementById('noPriceCount').textContent = noPriceRows.length;
+    buildBrandChips();
+    renderRows();
+    document.getElementById('listCard').style.display = 'block';
+  }catch(e){
+    alert('업로드 실패: ' + e.message);
+  }
+}
+
+function buildBrandChips(){
+  const counts = {};
+  noPriceRows.forEach(r=>{
+    const b = r.brand || '기타/직접입력';
+    counts[b] = (counts[b]||0) + 1;
+  });
+  const brands = Object.keys(counts).sort((a,b)=>counts[b]-counts[a]);
+  const box = document.getElementById('brandFilterChips');
+  const allChip = `<div class="bchip ${activeBrandFilter.size===0?'active':''}" data-brand="__all__">전체<span class="n">${noPriceRows.length}</span></div>`;
+  const chips = brands.map(b=>`<div class="bchip ${activeBrandFilter.has(b)?'active':''}" data-brand="${escapeHtml(b)}">${escapeHtml(b)}<span class="n">${counts[b]}</span></div>`).join('');
+  box.innerHTML = allChip + chips;
+  box.querySelectorAll('.bchip').forEach(chip=>{
+    chip.addEventListener('click', ()=>{
+      const b = chip.getAttribute('data-brand');
+      if(b === '__all__'){ activeBrandFilter.clear(); }
+      else{
+        if(activeBrandFilter.has(b)) activeBrandFilter.delete(b);
+        else activeBrandFilter.add(b);
+      }
+      buildBrandChips();
+      renderRows();
+    });
+  });
+}
+
+function visibleRows(){
+  if(activeBrandFilter.size===0) return noPriceRows;
+  return noPriceRows.filter(r=>activeBrandFilter.has(r.brand || '기타/직접입력'));
+}
+
+function renderRows(){
+  const tbody = document.getElementById('rowsBody');
+  const rows = visibleRows();
+  tbody.innerHTML = rows.map(r=>{
+    const q = queryOverrides[r.row_id] !== undefined ? queryOverrides[r.row_id] : (r.brand + ' ' + r.part_no).trim();
+    const checked = selectedIds.has(r.row_id);
+    return `
+    <tr data-row="${r.row_id}" class="${checked?'selected':''}">
+      <td class="chk-cell"><input type="checkbox" class="rowchk" ${checked?'checked':''}></td>
+      <td>${escapeHtml(r.part_no)}</td>
+      <td>${escapeHtml(r.brand)}</td>
+      <td>${escapeHtml(r.conditions)}</td>
+      <td class="title-cell">${escapeHtml((r.product_title||'').slice(0,40))}</td>
+      <td><input class="q-input" value="${escapeHtml(q)}"></td>
+      <td class="del-cell"><button class="icon-del" data-delrow="${r.row_id}" title="목록에서 삭제">✕</button></td>
+    </tr>`;
+  }).join('');
+
+  tbody.querySelectorAll('tr').forEach(tr=>{
+    const rowId = parseInt(tr.getAttribute('data-row'));
+    const cb = tr.querySelector('.rowchk');
+    const qInput = tr.querySelector('.q-input');
+    const delBtn = tr.querySelector('.icon-del');
+
+    qInput.addEventListener('input', ()=>{ queryOverrides[rowId] = qInput.value; });
+    qInput.addEventListener('click', e=>e.stopPropagation());
+    qInput.addEventListener('mousedown', e=>e.stopPropagation());
+
+    delBtn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      deleteRows([rowId]);
+    });
+    delBtn.addEventListener('mousedown', e=>e.stopPropagation());
+
+    function setRowState(state){
+      if(state) selectedIds.add(rowId); else selectedIds.delete(rowId);
+      cb.checked = state;
+      tr.classList.toggle('selected', state);
+      updateSelCount();
+    }
+
+    tr.addEventListener('mousedown', (e)=>{
+      if(e.target === qInput || e.target === delBtn) return;
+      e.preventDefault();
+      isDragging = true;
+      dragTargetState = !selectedIds.has(rowId);
+      setRowState(dragTargetState);
+    });
+    tr.addEventListener('mouseenter', ()=>{
+      if(isDragging) setRowState(dragTargetState);
+    });
+    cb.addEventListener('change', ()=> setRowState(cb.checked));
+  });
+  updateSelCount();
+}
+
+// 목록에서 행 삭제 (개별 × 버튼 또는 "선택 삭제" 버튼에서 호출)
+function deleteRows(rowIds){
+  const idSet = new Set(rowIds);
+  noPriceRows = noPriceRows.filter(r=>!idSet.has(r.row_id));
+  idSet.forEach(id=>{ selectedIds.delete(id); delete queryOverrides[id]; });
+  document.getElementById('noPriceCount').textContent = noPriceRows.length;
+  buildBrandChips();
+  renderRows();
+}
+
+function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+document.getElementById('selAllBtn').addEventListener('click', ()=>{
+  visibleRows().forEach(r=>selectedIds.add(r.row_id));
+  renderRows();
+});
+document.getElementById('selNoneBtn').addEventListener('click', ()=>{
+  visibleRows().forEach(r=>selectedIds.delete(r.row_id));
+  renderRows();
+});
+document.getElementById('deleteSelectedBtn').addEventListener('click', ()=>{
+  if(selectedIds.size===0) return;
+  if(!confirm(`선택한 ${selectedIds.size}건을 목록에서 삭제할까요? (eBay 조회 없이 목록에서만 제거되며, 되돌릴 수 없습니다)`)) return;
+  deleteRows([...selectedIds]);
+});
+
+function updateSelCount(){
+  const n = selectedIds.size;
+  document.getElementById('selCount').textContent = n;
+  document.getElementById('searchBtn').disabled = n===0;
+  document.getElementById('delCount').textContent = n;
+  document.getElementById('deleteSelectedBtn').disabled = n===0;
+}
+
+document.getElementById('searchBtn').addEventListener('click', async ()=>{
+  const items = [...selectedIds].map(rowId=>{
+    const r = noPriceRows.find(x=>x.row_id===rowId);
+    const q = queryOverrides[rowId] !== undefined ? queryOverrides[rowId] : (r.brand + ' ' + r.part_no).trim();
+    return { row_id: rowId, query: q, part_no: r.part_no, brand: r.brand };
+  });
+  if(items.length===0) return;
+
+  const btn = document.getElementById('searchBtn');
+  const track = document.getElementById('searchProgressTrack');
+  const fill = document.getElementById('searchProgressFill');
+  const label = document.getElementById('searchProgressLabel');
+
+  btn.disabled = true;
+  track.classList.add('active');
+  label.classList.add('active');
+  fill.style.width = '0%';
+
+  document.getElementById('resultsCard').style.display = 'block';
+  document.getElementById('resultsCard').scrollIntoView({behavior:'smooth'});
+
+  await searchItemsSequentially(items, (done, total)=>{
+    const pct = total ? Math.round(done/total*100) : 0;
+    fill.style.width = pct + '%';
+    label.textContent = `조회 중... ${done} / ${total}건 (${pct}%)`;
+    btn.innerHTML = `<span class="spinner"></span> 조회 중 (${done}/${total})`;
+  });
+
+  label.textContent = `완료 — ${items.length}건 조회됨`;
+  setTimeout(()=>{ track.classList.remove('active'); label.classList.remove('active'); }, 1800);
+  btn.disabled = false;
+  btn.innerHTML = '선택 항목 eBay 조회 (<span id="selCount">'+selectedIds.size+'</span>)';
+});
+
+document.getElementById('fxRate').addEventListener('input', renderResults);
+
+function median(arr){
+  const s=[...arr].sort((a,b)=>a-b); const n=s.length;
+  if(!n) return 0;
+  const m=Math.floor(n/2);
+  return n%2? s[m] : (s[m-1]+s[m])/2;
+}
+
+function renderResults(){
+  const fx = parseFloat(document.getElementById('fxRate').value)||1495;
+  const box = document.getElementById('resultsBody');
+  const rowMeta = {};
+  noPriceRows.forEach(r=>rowMeta[r.row_id]=r);
+
+  const ids = Object.keys(lastResults);
+  if(ids.length===0){ box.innerHTML = '<div class="empty">아직 조회된 결과가 없습니다</div>'; return; }
+
+  box.innerHTML = ids.map(id=>{
+    const res = lastResults[id];
+    const meta = rowMeta[id] || {};
+    const webLink = res.web_search_url
+      ? `<div style="margin-top:6px;"><a href="${res.web_search_url}" target="_blank" style="color:var(--teal-dark);font-size:11.5px;">↗ 이 검색어로 eBay 웹에서 직접 확인</a></div>`
+      : '';
+    const warnLine = (res.warnings && res.warnings.length)
+      ? `<div style="color:var(--amber);font-size:11px;margin-top:4px;">eBay API 경고: ${escapeHtml(JSON.stringify(res.warnings))}</div>` : '';
+    let body = '';
+    if(res.error){
+      body = `<div class="err-text">오류: ${escapeHtml(res.error)}</div>${webLink}`;
+    } else if(!res.usd_stats){
+      body = `<div class="err-text">정확히 일치하는 매물 ${res.total_matching||0}건 (USD 매물 없음) — 검색어를 더 일반적인 표현으로 조정해 보세요. eBay 웹 화면에 뭔가 나오더라도 품번이 다르면 "관련 상품" 표시일 뿐 실제 일치가 아닙니다.</div>${warnLine}${webLink}`;
+    } else {
+      const s = res.usd_stats;
+      const mktLine = res.marketplaces_searched ? `<div style="font-size:11px;color:var(--muted2);margin-bottom:6px;">조회 국가: ${escapeHtml(res.marketplaces_searched.join(', '))}</div>` : '';
+      let confLabel, confColor, confBg, confNote;
+      if(s.count===1){
+        confLabel = '신뢰도 낮음 (매물 1건)'; confColor = 'var(--red)'; confBg = 'var(--red-bg)';
+        confNote = '매물이 1건뿐이라 이 가격은 "시세"가 아니라 그 판매자 1명이 부른 호가입니다. 검색어를 더 넓게(모델명만, 국가 추가 등) 조정해서 비교 대상을 늘려보세요.';
+      } else if(s.count<=3){
+        confLabel = `신뢰도 보통 (매물 ${s.count}건)`; confColor = 'var(--amber)'; confBg = 'var(--amber-bg)';
+        confNote = '표본이 적어 참고용으로만 활용하고, 가능하면 myhubon 자체 판매이력(1번 대시보드)과 교차 확인하세요.';
+      } else {
+        confLabel = `신뢰도 높음 (매물 ${s.count}건)`; confColor = 'var(--green)'; confBg = 'var(--green-bg)';
+        confNote = '';
+      }
+      body = `
+        ${mktLine}
+        <div style="display:inline-block;font-family:var(--mono);font-size:11px;color:${confColor};background:${confBg};border:1px solid ${confColor};border-radius:20px;padding:3px 10px;margin-bottom:8px;font-weight:600;">${confLabel}</div>
+        <div class="result-stats">
+          <span>매물 <b>${s.count}</b>건</span>
+          <span>최저 <b>$${s.min.toLocaleString()}</b></span>
+          <span>최고 <b>$${s.max.toLocaleString()}</b></span>
+          <span>중앙값(1차 추천, USD환산) <b>$${s.median.toLocaleString()}</b> / <b>₩${Math.round(s.median*fx).toLocaleString()}</b>${s.median_trimmed ? ' <span style="font-size:10px;color:var(--teal-dark);background:var(--teal-bg);border:1px solid var(--teal);border-radius:10px;padding:1px 7px;">최저·최고 제외 계산</span>' : ''}</span>
+        </div>
+        ${s.median_trimmed ? `<div style="font-size:11px;color:var(--muted2);margin-bottom:6px;">매물이 ${s.count}건으로 충분해서, 극단적으로 낮거나 높은 매물 각 1건을 뺀 나머지로 중앙값을 계산했습니다 (더 안정적인 시세 참고용).</div>` : ''}
+        ${confNote ? `<div style="font-size:11.5px;color:var(--muted);margin-bottom:8px;">${confNote}</div>` : ''}
+        ${res.listings.slice(0,8).map(l=>`
+          <div class="listing-row">
+            <span>${escapeHtml((l.title||'').slice(0,55))} <span style="color:var(--muted2)">[${escapeHtml(l.condition||'-')}] · ${escapeHtml(l.marketplace_label||'')}</span></span>
+            <span>${escapeHtml(l.currency||'')} ${l.price.toLocaleString()}${l.currency!=='USD' && l.usd_equiv!=null ? ' (&asymp;$'+l.usd_equiv.toLocaleString()+')' : ''} &middot; <a href="${l.itemWebUrl}" target="_blank">보기</a></span>
+          </div>
+        `).join('')}
+        ${webLink}
+      `;
+    }
+    return `
+      <div class="result-block">
+        <div style="font-family:var(--mono);font-size:13px;margin-bottom:6px;color:var(--text);font-weight:700;">
+          ${escapeHtml(meta.part_no||'')} <span style="color:var(--muted);font-size:11.5px;font-weight:400;">(${escapeHtml(meta.brand||'')} · 검색어: ${escapeHtml(res.query)})</span>
+          ${res.usd_stats ? `<button class="ghost" style="margin-left:10px;padding:3px 10px;font-size:11px;" data-viewtrend="${escapeHtml(meta.part_no||res.query)}">📈 이 부품 가격추이 보기</button>` : ''}
+        </div>
+        ${body}
+      </div>
+    `;
+  }).join('');
+
+  box.querySelectorAll('[data-viewtrend]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const pn = btn.getAttribute('data-viewtrend');
+      document.querySelector('.rtab[data-rtab="trend"]').click();
+      populateTrendSelect(pn);
+    });
+  });
+}
+
+document.getElementById('exportBtn').addEventListener('click', ()=>{
+  const fx = parseFloat(document.getElementById('fxRate').value)||1495;
+  const rowMeta = {};
+  noPriceRows.forEach(r=>rowMeta[r.row_id]=r);
+
+  const header = [
+    'part_no','brand','myhubon_condition','search_query',
+    'group_count','group_min_usd','group_max_usd','group_median_usd','group_rec_krw',
+    'ebay_marketplace','ebay_title','ebay_condition',
+    'ebay_price_native','ebay_currency','ebay_price_usd','ebay_price_krw','ebay_listing_url','note'
+  ];
+  const esc = v => `"${String(v==null?'':v).replace(/"/g,'""')}"`;
+  const lines = [header.map(esc).join(',')];
+
+  Object.keys(lastResults).forEach(id=>{
+    const res = lastResults[id];
+    const meta = rowMeta[id] || {};
+    const s = res.usd_stats;
+    const groupCols = [
+      meta.part_no, meta.brand, meta.conditions, res.query,
+      s ? s.count : 0, s ? s.min : '', s ? s.max : '', s ? s.median : '', s ? Math.round(s.median*fx) : ''
+    ];
+
+    if(res.error){
+      lines.push(groupCols.concat(['', '', '', '', '', '', '', '', '오류: ' + res.error]).map(esc).join(','));
+      return;
+    }
+    if(!res.listings || res.listings.length===0){
+      lines.push(groupCols.concat(['', '', '', '', '', '', '', '', `일치 매물 없음 (전체 매칭 ${res.total_matching||0}건)`]).map(esc).join(','));
+      return;
+    }
+    res.listings.forEach(l=>{
+      lines.push(groupCols.concat([
+        l.marketplace_label || '',
+        l.title || '',
+        l.condition || '',
+        l.price,
+        l.currency || '',
+        l.usd_equiv != null ? l.usd_equiv : '',
+        l.usd_equiv != null ? Math.round(l.usd_equiv*fx) : '',
+        l.itemWebUrl || '',
+        ''
+      ]).map(esc).join(','));
+    });
+  });
+
+  const csv = '\uFEFF' + lines.join('\n'); // BOM 포함 -> 엑셀에서 한글 깨짐 방지
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'ebay_price_results.csv'; a.click();
+});
+</script>
+</body>
+</html>
