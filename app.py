@@ -22,10 +22,13 @@ exe로 빌드해서 쓰는 방법은 build.bat / README.md 참고.
 CORS로 막히고, Client Secret이 그대로 노출되는 문제가 있어 반드시 서버를 거쳐야 한다).
 """
 import os
+import re
 import sys
 import io
+import gc
 import time
 import base64
+import tempfile
 import sqlite3
 import statistics
 import threading
@@ -61,8 +64,14 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 # 가격 이력 저장용 SQLite DB. exe/스크립트가 있는 폴더에 파일로 저장되어
 # 서버를 재시작해도 유지되고, 이 서버에 접속하는 모든 사람이 같은 이력을 본다
 # (기존 브라우저 localStorage 방식과 달리 팀 전체 공유).
+#
+# 주의(Render 등 클라우드 배포 시): Render 기본 디스크는 배포/재시작마다
+# 초기화되는 "ephemeral(휘발성)" 파일시스템이라, DB_PATH 환경변수 없이 코드 위치
+# 옆에 그냥 저장하면 재배포할 때마다 가격 추이 기록이 날아간다. Render에서
+# Persistent Disk를 추가하고(예: /var/data 마운트) 환경변수 DB_PATH=/var/data/price_history.db
+# 로 지정하면 재배포해도 기록이 유지된다.
 # ---------------------------------------------------------------------------
-DB_PATH = os.path.join(BASE_DIR, "price_history.db")
+DB_PATH = os.getenv("DB_PATH") or os.path.join(BASE_DIR, "price_history.db")
 
 
 def get_db():
@@ -129,6 +138,9 @@ EBAY_ENV = os.getenv("EBAY_ENV", "production").lower()   # "production" or "sand
 BASE_URL = "https://api.sandbox.ebay.com" if EBAY_ENV == "sandbox" else "https://api.ebay.com"
 
 app = Flask(__name__, static_folder=resource_path("static"), static_url_path="")
+# 업로드 파일 크기 상한 - Render 같은 메모리 적은(512MB) 서버에서 지나치게 큰 파일이
+# 올라와서 그대로 OOM(메모리 부족)으로 죽는 걸 방지. 상품 목록 엑셀 용도로는 30MB면 충분.
+app.config["MAX_CONTENT_LENGTH"] = 30 * 1024 * 1024
 
 
 
@@ -227,13 +239,17 @@ def get_ebay_token():
 # 조회 가능한 eBay 국가별 사이트(마켓플레이스) 목록
 # ---------------------------------------------------------------------------
 MARKETPLACES = {
+    # "월드와이드" 가상 옵션 - 국가 필터를 아예 안 걸고 EBAY_US 사이트를 조회.
+    # eBay Browse API는 itemLocationCountry 필터를 안 주면 KR로 배송 가능한
+    # "전세계 모든 출고국" 매물을 다 돌려준다. 즉 이게 곧 월드와이드 검색이다.
+    "EBAY_WORLDWIDE": {"label": "🌍 월드와이드 (전체 출고국, ebay.com)", "currency": "USD"},
     "EBAY_US": {"label": "미국 (ebay.com)",       "currency": "USD"},
-    # 주요 국가 필터 옵션 (EBAY_US 기반)
+    # 주요 국가 필터 옵션 (EBAY_US 기반) - 월드와이드 결과 중 특정 출고국만 보고 싶을 때
     "EBAY_US_JP": {"label": "일본 출고 (ebay.com - JP)", "currency": "USD"},
     "EBAY_US_TW": {"label": "대만 출고 (ebay.com - TW)", "currency": "USD"},
     "EBAY_US_CN": {"label": "중국 출고 (ebay.com - CN)", "currency": "USD"},
     "EBAY_US_KR": {"label": "한국 출고 (ebay.com - KR)", "currency": "USD"},
-    # 기존 사이트별 마켓플레이스
+    # 기존 사이트별 마켓플레이스 (다른 나라 로컬 eBay 사이트)
     "EBAY_GB": {"label": "영국 (ebay.co.uk)",      "currency": "GBP"},
     "EBAY_DE": {"label": "독일 (ebay.de)",         "currency": "EUR"},
     "EBAY_FR": {"label": "프랑스 (ebay.fr)",       "currency": "EUR"},
@@ -244,7 +260,8 @@ MARKETPLACES = {
     "EBAY_HK": {"label": "홍콩 (ebay.com.hk)",     "currency": "HKD"},
     "EBAY_SG": {"label": "싱가포르 (ebay.com.sg)", "currency": "SGD"},
 }
-DEFAULT_MARKETPLACES = [m.strip() for m in os.getenv("EBAY_MARKETPLACES", os.getenv("EBAY_MARKETPLACE", "EBAY_US")).split(",") if m.strip()]
+# "월드와이드" 값들이 겹치므로(EBAY_US에 국가필터 없음 = 월드와이드) 기본값은 월드와이드 하나만.
+DEFAULT_MARKETPLACES = [m.strip() for m in os.getenv("EBAY_MARKETPLACES", os.getenv("EBAY_MARKETPLACE", "EBAY_WORLDWIDE")).split(",") if m.strip()]
 
 
 @app.route("/api/marketplaces", methods=["GET"])
@@ -263,7 +280,7 @@ def get_usd_rates():
     if _fx_cache["rates_to_usd"] and now - _fx_cache["fetched_at"] < timedelta(hours=6):
         return _fx_cache["rates_to_usd"]
     try:
-        currencies = ",".join(sorted({m["currency"] for m in MARKETPLACES.values()} - {"USD"}))
+        currencies = ",".join(sorted({m["currency"] for m in MARKETPLACES.values()} - {"USD"} | {"KRW"}))
         resp = requests.get(
             "https://api.frankfurter.app/latest",
             params={"from": "USD", "to": currencies},
@@ -298,45 +315,80 @@ def parse_excel():
     if "file" not in request.files:
         return jsonify({"error": "파일이 없습니다"}), 400
     f = request.files["file"]
-    wb = load_workbook(io.BytesIO(f.read()), data_only=True)
-    ws = wb.active
 
-    header = [c.value for c in ws[1]]
-    missing = [c for c in REQUIRED_COLS if c not in header]
-    if missing:
-        return jsonify({"error": f"필수 컬럼이 없습니다: {missing}"}), 400
-    idx = {name: header.index(name) for name in header if name is not None}
-
+    # ------------------------------------------------------------------
+    # 메모리 절약 포인트 1: f.read()로 파일 전체를 메모리(BytesIO)에 올리는 대신
+    # 디스크의 임시 파일에 1MB씩 나눠 써서 저장한다. 업로드 스트림 전체를
+    # 한 번에 메모리로 복사하지 않아도 되므로 큰 파일에서 메모리 사용량이 확 줄어든다.
+    # ------------------------------------------------------------------
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
     no_price_rows = []
-    priced_rows = []
-    row_id = 0
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        row_id += 1
-        part_no = row[idx["part_no"]]
-        if not part_no:
-            continue
+    priced_count = 0
+    try:
+        with os.fdopen(tmp_fd, "wb") as tmp:
+            while True:
+                chunk = f.stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                tmp.write(chunk)
+
+        # ------------------------------------------------------------------
+        # 메모리 절약 포인트 2: read_only=True로 열면 openpyxl이 시트 전체를
+        # 셀 객체(서식/스타일 포함)로 메모리에 다 올리지 않고, 행 단위로 필요한
+        # 만큼만 스트리밍해서 읽는다. 기본 모드(read_only=False)는 엑셀이 조금만
+        # 커도 메모리를 몇 배로 잡아먹어서 Render 같은 저메모리 환경에서 OOM이
+        # 나는 주된 원인이었다.
+        # ------------------------------------------------------------------
+        wb = load_workbook(tmp_path, read_only=True, data_only=True)
         try:
-            price = float(row[idx["product_price"]])
-        except (TypeError, ValueError):
-            price = None
-        disp = row[idx["price_display_yn"]]
-        item = {
-            "row_id": row_id,
-            "part_no": str(part_no),
-            "brand": row[idx["brand"]] or "",
-            "conditions": row[idx["conditions"]] or "",
-            "product_title": row[idx["product_title"]] or "",
-            "product_price": price,
-            "price_display_yn": disp,
-        }
-        if disp == "Y" and price is not None and price > 1:
-            priced_rows.append(item)
-        else:
-            no_price_rows.append(item)
+            ws = wb.active
+
+            header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
+            if header_row is None:
+                return jsonify({"error": "빈 엑셀 파일입니다"}), 400
+            header = list(header_row)
+            missing = [c for c in REQUIRED_COLS if c not in header]
+            if missing:
+                return jsonify({"error": f"필수 컬럼이 없습니다: {missing}"}), 400
+            idx = {name: header.index(name) for name in header if name is not None}
+
+            row_id = 0
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                row_id += 1
+                part_no = row[idx["part_no"]]
+                if not part_no:
+                    continue
+                try:
+                    price = float(row[idx["product_price"]])
+                except (TypeError, ValueError):
+                    price = None
+                disp = row[idx["price_display_yn"]]
+                if disp == "Y" and price is not None and price > 1:
+                    # 가격 등록된 행은 목록에 안 쓰므로 개수만 세고 내용은 버린다
+                    # (예전엔 이 행들도 다 리스트에 쌓아뒀다가 개수만 리턴해서 낭비였음)
+                    priced_count += 1
+                    continue
+                no_price_rows.append({
+                    "row_id": row_id,
+                    "part_no": str(part_no),
+                    "brand": row[idx["brand"]] or "",
+                    "conditions": row[idx["conditions"]] or "",
+                    "product_title": row[idx["product_title"]] or "",
+                    "product_price": price,
+                    "price_display_yn": disp,
+                })
+        finally:
+            wb.close()
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        gc.collect()
 
     return jsonify({
         "no_price_count": len(no_price_rows),
-        "priced_count": len(priced_rows),
+        "priced_count": priced_count,
         "no_price_rows": no_price_rows,
     })
 
@@ -392,6 +444,42 @@ def search_ebay_once(query, marketplace_id, limit=20, item_location_country=None
     resp.raise_for_status()
     return resp.json()
 
+def dedupe_listings(listings):
+    """여러 국가(마켓플레이스) 사이트로 나눠서 조회하다 보면, 같은 판매자가 올린
+    완전히 동일한 매물(itemId 동일)이 국가마다 한 번씩 중복으로 잡히는 경우가 있다
+    (특히 유럽/월드와이드처럼 같은 글로벌 리스팅이 여러 로컬 사이트에 다 노출되는 경우).
+    itemId 기준으로 첫 등장한 것만 대표로 남기고, 나머지는 "이 매물이 또 뜬 나라 목록"
+    (duplicate_marketplaces)으로만 접어서 대표 항목에 붙여둔다 - 목록/통계는 깔끔해지고,
+    어느 국가들에 중복으로 올라와 있었는지는 CSV에서 그대로 확인할 수 있다.
+    """
+    seen = {}
+    order = []
+    for l in listings:
+        key = l.get("item_id") or l["itemWebUrl"]
+        if key not in seen:
+            l["duplicate_marketplaces"] = []
+            seen[key] = l
+            order.append(key)
+        else:
+            first = seen[key]
+            label = l.get("marketplace_label")
+            if label and label not in first["duplicate_marketplaces"] and label != first.get("marketplace_label"):
+                first["duplicate_marketplaces"].append(label)
+    return [seen[k] for k in order]
+
+
+def extract_item_id(it_summary):
+    """중복 판정에 쓸 매물 고유 ID. eBay Browse API의 itemId는 마켓플레이스(국가)가
+    달라도 같은 실제 리스팅이면 동일한 값을 준다. 혹시 없으면 itemWebUrl에서 상품번호를
+    뽑아 대신 쓴다."""
+    item_id = it_summary.get("itemId")
+    if item_id:
+        return item_id
+    url = it_summary.get("itemWebUrl") or ""
+    m = re.search(r"/itm/(\d+)", url)
+    return m.group(1) if m else None
+
+
 @app.route("/api/search-ebay", methods=["POST"])
 def search_ebay():
     body = request.get_json(force=True)
@@ -412,7 +500,6 @@ def search_ebay():
             continue
 
         listings = []
-        usd_equiv_prices = []
         total_matching = 0
         warnings = []
         had_success = False
@@ -420,7 +507,11 @@ def search_ebay():
         for mkt in marketplaces:
             try:
                 # EBAY_US_XX 형태인 경우 EBAY_US를 마켓으로 쓰되, XX를 국가 필터로 적용
-                if mkt.startswith("EBAY_US_"):
+                if mkt == "EBAY_WORLDWIDE":
+                    # 월드와이드 = EBAY_US 사이트를 국가 필터 없이 그대로 조회
+                    actual_mkt = "EBAY_US"
+                    loc_filter = None
+                elif mkt.startswith("EBAY_US_"):
                     actual_mkt = "EBAY_US"
                     loc_filter = mkt.split("_")[-1]  # 'JP', 'TW', 'CN', 'KR' 추출
                 else:
@@ -436,10 +527,32 @@ def search_ebay():
             warnings.extend(data.get("warnings", []) or [])
 
             for it_summary in data.get("itemSummaries", []) or []:
-                price_obj = it_summary.get("price") or {}
-                val = price_obj.get("value")
-                cur = price_obj.get("currency")
+                # 고정가(Buy It Now) 매물은 "price" 필드를 쓰지만, 경매(auction) 매물은
+                # "price"가 아예 없고 "currentBidPrice"(현재 입찰가)만 온다.
+                # 예전 코드는 "price"가 없으면 그냥 continue로 건너뛰어서, eBay에 매물이
+                # 있어도(total_matching > 0) 화면 목록에서는 통째로 사라지는 버그가 있었다.
+                price_obj = it_summary.get("price")
+                is_auction = False
+                if not price_obj or price_obj.get("value") is None:
+                    price_obj = it_summary.get("currentBidPrice") or {}
+                    is_auction = True
+
+                # 핵심 버그: X-EBAY-C-ENDUSERCTX(contextualLocation=KR) 헤더 때문에
+                # eBay가 "미국(EBAY_US)" 매물 가격을 원래 USD가 아니라 구매자 위치(한국) 기준
+                # KRW로 자동 환산해서 내려주는 경우가 있다. 이러면 currency가 "KRW"로 찍히고
+                # 우리 환율표에는 KRW가 없어서 usd_equiv가 계산 안 되고, 그 결과 이 매물들이
+                # 전부 통계(최저/최고/중앙값)와 목록에서 사실상 빠지는 문제가 있었다.
+                # eBay는 이렇게 자동 환산할 때 원래(판매자) 통화/가격을 convertedFromValue /
+                # convertedFromCurrency 필드에 같이 내려주므로, 있으면 그걸 우선 사용해서
+                # 원래 통화(대부분 USD) 기준으로 정확히 계산한다.
+                if price_obj.get("convertedFromCurrency") and price_obj.get("convertedFromValue") is not None:
+                    val = price_obj.get("convertedFromValue")
+                    cur = price_obj.get("convertedFromCurrency")
+                else:
+                    val = price_obj.get("value")
+                    cur = price_obj.get("currency")
                 if val is None:
+                    # 가격 정보 자체가 없는 매물(문의 후 견적 등)만 진짜로 건너뛴다.
                     continue
                 try:
                     val = float(val)
@@ -448,6 +561,7 @@ def search_ebay():
                 rate = fx.get(cur)
                 usd_equiv = round(val * rate, 2) if rate else None
                 listings.append({
+                    "item_id": extract_item_id(it_summary),
                     "title": it_summary.get("title"),
                     "price": val,
                     "currency": cur,
@@ -457,15 +571,24 @@ def search_ebay():
                     "condition": it_summary.get("condition"),
                     "itemWebUrl": it_summary.get("itemWebUrl"),
                     "seller": (it_summary.get("seller") or {}).get("username"),
+                    "is_auction": is_auction,
+                    # 월드와이드로 검색해도 실제 이 매물이 어느 나라에서 출고되는지는
+                    # eBay가 itemLocation.country로 알려준다 (예: "US", "JP", "KR" 등)
+                    "item_location_country": (it_summary.get("itemLocation") or {}).get("country"),
                 })
-                if usd_equiv is not None:
-                    usd_equiv_prices.append(usd_equiv)
 
             time.sleep(0.15)  # eBay rate limit 여유 (마켓플레이스별 호출 사이)
 
         if not had_success:
             results.append({"row_id": row_id, "query": query, "error": "모든 마켓플레이스 조회 실패: " + "; ".join(warnings)})
             continue
+
+        raw_count = len(listings)
+        listings = dedupe_listings(listings)
+        duplicates_removed = raw_count - len(listings)
+
+        # 통계(최저/최고/중앙값)는 중복 제거 후 남은, 경매 아닌 매물만 대상으로 계산
+        usd_equiv_prices = [l["usd_equiv"] for l in listings if l["usd_equiv"] is not None and not l["is_auction"]]
 
         listings.sort(key=lambda l: l["usd_equiv"] if l["usd_equiv"] is not None else float("inf"))
 
@@ -492,6 +615,7 @@ def search_ebay():
             "query": query,
             "marketplaces_searched": [MARKETPLACES[m]["label"] for m in marketplaces],
             "total_matching": total_matching,
+            "duplicates_removed": duplicates_removed,
             "listings": listings[:15],
             "usd_stats": stat,
             "warnings": warnings,
