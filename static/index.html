@@ -146,9 +146,15 @@
   </div>
 
   <div class="card" style="margin-top:16px;">
-    <div class="card-title">🌐 조회할 eBay 국가 선택 (여러 개 선택 가능)</div>
+    <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <span>🌐 조회할 eBay 국가 선택 (여러 개 선택 가능)</span>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button class="ghost" id="worldwideOnlyBtn" style="padding:6px 12px;font-size:12px;">🌍 월드와이드만 선택</button>
+        <button class="ghost" id="selectAllMktBtn" style="padding:6px 12px;font-size:12px;">✅ 전체 선택</button>
+      </div>
+    </div>
     <div class="brand-chips" id="marketplaceChips"><span style="color:var(--muted2);font-size:12px;">불러오는 중...</span></div>
-    <div class="sub" style="margin-bottom:0;">해외 사이트는 각국 통화로 반환되며, 실시간 환율로 자동 USD/KRW 환산해서 함께 보여줍니다.</div>
+    <div class="sub" style="margin-bottom:0;">"🌍 월드와이드"를 선택하면 국가 필터 없이 KR로 배송 가능한 전 세계 출고 매물을 한 번에 다 가져옵니다 — 국가를 하나하나 고를 필요 없습니다. 나머지 국가별 항목은 특정 출고국만 따로 좁혀보고 싶을 때만 추가로 선택하세요. 해외 통화는 실시간 환율로 자동 USD/KRW 환산해서 함께 보여줍니다.</div>
   </div>
 
   <div class="card">
@@ -231,9 +237,9 @@
   </div>
 
   <div class="footer-note">
-    가격 = eBay Browse API item_summary/search 결과 중 currency=USD 매물 기준 min/max/median.
+    가격 = eBay Browse API item_summary/search 결과 중 고정가(Buy It Now) 매물 기준 min/max/median (경매 현재입찰가는 목록에는 표시되지만 통계에서는 제외).
     검색어는 "메이커 + P/N" 기본값이며 실제 eBay 리스팅 표기와 다를 수 있어 수정 후 조회를 권장합니다.
-    조회 결과가 0건이면 검색어를 더 일반적인 표현(모델명 등)으로 바꿔 재시도하세요.
+    기본 조회 국가는 🌍 월드와이드(국가 필터 없음)이며, 조회 결과가 0건이면 검색어를 더 일반적인 표현(모델명 등)으로 바꿔 재시도하세요.
   </div>
 </div>
 
@@ -301,6 +307,22 @@ async function loadMarketplaces(){
   }
 }
 loadMarketplaces();
+
+document.getElementById('worldwideOnlyBtn').addEventListener('click', ()=>{
+  selectedMarketplaces = new Set(['EBAY_WORLDWIDE']);
+  document.querySelectorAll('#marketplaceChips .bchip').forEach(chip=>{
+    chip.classList.toggle('active', chip.getAttribute('data-mkt')==='EBAY_WORLDWIDE');
+  });
+});
+
+document.getElementById('selectAllMktBtn').addEventListener('click', ()=>{
+  selectedMarketplaces = new Set(
+    Array.from(document.querySelectorAll('#marketplaceChips .bchip')).map(chip=>chip.getAttribute('data-mkt'))
+  );
+  document.querySelectorAll('#marketplaceChips .bchip').forEach(chip=>{
+    chip.classList.add('active');
+  });
+});
 
 let manualCounter = -1; // 음수 row_id로 엑셀 row_id(양수)와 충돌 방지
 
@@ -821,13 +843,29 @@ function renderResults(){
     const warnLine = (res.warnings && res.warnings.length)
       ? `<div style="color:var(--amber);font-size:11px;margin-top:4px;">eBay API 경고: ${escapeHtml(JSON.stringify(res.warnings))}</div>` : '';
     let body = '';
+    const mktLine = res.marketplaces_searched ? `<div style="font-size:11px;color:var(--muted2);margin-bottom:6px;">조회 국가: ${escapeHtml(res.marketplaces_searched.join(', '))}${res.duplicates_removed ? ` · 동일 매물 중복 ${res.duplicates_removed}건 제거됨` : ''}</div>` : '';
+    const listingRow = l => `
+          <div class="listing-row">
+            <div>${escapeHtml((l.title||'').slice(0,55))} <span style="color:var(--muted2)">[${escapeHtml(l.condition||'-')}] · ${escapeHtml(l.marketplace_label||'')}${l.item_location_country ? ' · 출고국 '+escapeHtml(l.item_location_country) : ''}${l.is_auction ? ' · <span style="color:var(--amber)">경매(현재 입찰가)</span>' : ''}</span>${l.duplicate_marketplaces && l.duplicate_marketplaces.length ? `<div style="font-size:10.5px;color:var(--muted2);margin-top:2px;">↳ 동일 매물이 ${l.duplicate_marketplaces.length}개국에도 같은 가격으로 중복 등록되어 있음 (${escapeHtml(l.duplicate_marketplaces.join(', '))}) — 목록/통계에는 1건으로만 반영</div>` : ''}</div>
+            <span>${escapeHtml(l.currency||'')} ${l.price.toLocaleString()}${l.currency!=='USD' && l.usd_equiv!=null ? ' (&asymp;$'+l.usd_equiv.toLocaleString()+')' : ''} &middot; <a href="${l.itemWebUrl}" target="_blank">보기</a></span>
+          </div>`;
     if(res.error){
       body = `<div class="err-text">오류: ${escapeHtml(res.error)}</div>${webLink}`;
+    } else if(!res.listings || res.listings.length===0){
+      // 진짜로 매물이 하나도 없을 때만 이 메시지 (예전엔 매물이 있어도 USD 통계가
+      // 없으면 무조건 이 메시지가 떠서 실제 있는 매물이 화면에서 사라지는 버그가 있었음)
+      body = `<div class="err-text">정확히 일치하는 매물 ${res.total_matching||0}건 (표시 가능한 매물 없음) — 검색어를 더 일반적인 표현으로 조정해 보세요. eBay 웹 화면에 뭔가 나오더라도 품번이 다르면 "관련 상품" 표시일 뿐 실제 일치가 아닙니다.</div>${warnLine}${webLink}`;
     } else if(!res.usd_stats){
-      body = `<div class="err-text">정확히 일치하는 매물 ${res.total_matching||0}건 (USD 매물 없음) — 검색어를 더 일반적인 표현으로 조정해 보세요. eBay 웹 화면에 뭔가 나오더라도 품번이 다르면 "관련 상품" 표시일 뿐 실제 일치가 아닙니다.</div>${warnLine}${webLink}`;
+      // 매물은 있는데(경매만 있거나 환율 변환 실패 등) 시세 통계를 못 낸 경우 -
+      // 통계 없이 개별 매물 목록만이라도 보여준다.
+      body = `
+        ${mktLine}
+        <div class="err-text" style="margin-bottom:8px;">매물 ${res.listings.length}건 찾음 (경매만 있거나 환율 변환 실패로 최저/최고/중앙값 통계는 계산하지 못함) — 아래 개별 매물을 직접 확인하세요.</div>
+        ${res.listings.slice(0,8).map(listingRow).join('')}
+        ${webLink}
+      `;
     } else {
       const s = res.usd_stats;
-      const mktLine = res.marketplaces_searched ? `<div style="font-size:11px;color:var(--muted2);margin-bottom:6px;">조회 국가: ${escapeHtml(res.marketplaces_searched.join(', '))}</div>` : '';
       let confLabel, confColor, confBg, confNote;
       if(s.count===1){
         confLabel = '신뢰도 낮음 (매물 1건)'; confColor = 'var(--red)'; confBg = 'var(--red-bg)';
@@ -850,12 +888,7 @@ function renderResults(){
         </div>
         ${s.median_trimmed ? `<div style="font-size:11px;color:var(--muted2);margin-bottom:6px;">매물이 ${s.count}건으로 충분해서, 극단적으로 낮거나 높은 매물 각 1건을 뺀 나머지로 중앙값을 계산했습니다 (더 안정적인 시세 참고용).</div>` : ''}
         ${confNote ? `<div style="font-size:11.5px;color:var(--muted);margin-bottom:8px;">${confNote}</div>` : ''}
-        ${res.listings.slice(0,8).map(l=>`
-          <div class="listing-row">
-            <span>${escapeHtml((l.title||'').slice(0,55))} <span style="color:var(--muted2)">[${escapeHtml(l.condition||'-')}] · ${escapeHtml(l.marketplace_label||'')}</span></span>
-            <span>${escapeHtml(l.currency||'')} ${l.price.toLocaleString()}${l.currency!=='USD' && l.usd_equiv!=null ? ' (&asymp;$'+l.usd_equiv.toLocaleString()+')' : ''} &middot; <a href="${l.itemWebUrl}" target="_blank">보기</a></span>
-          </div>
-        `).join('')}
+        ${res.listings.slice(0,8).map(listingRow).join('')}
         ${webLink}
       `;
     }
@@ -887,8 +920,9 @@ document.getElementById('exportBtn').addEventListener('click', ()=>{
   const header = [
     'part_no','brand','myhubon_condition','search_query',
     'group_count','group_min_usd','group_max_usd','group_median_usd','group_rec_krw',
-    'ebay_marketplace','ebay_title','ebay_condition',
-    'ebay_price_native','ebay_currency','ebay_price_usd','ebay_price_krw','ebay_listing_url','note'
+    'ebay_marketplace','ebay_item_location_country','ebay_title','ebay_condition','ebay_is_auction',
+    'ebay_price_native','ebay_currency','ebay_price_usd','ebay_price_krw','ebay_listing_url',
+    'ebay_duplicate_marketplaces','note'
   ];
   const esc = v => `"${String(v==null?'':v).replace(/"/g,'""')}"`;
   const lines = [header.map(esc).join(',')];
@@ -903,23 +937,26 @@ document.getElementById('exportBtn').addEventListener('click', ()=>{
     ];
 
     if(res.error){
-      lines.push(groupCols.concat(['', '', '', '', '', '', '', '', '오류: ' + res.error]).map(esc).join(','));
+      lines.push(groupCols.concat(['', '', '', '', '', '', '', '', '', '', '', '오류: ' + res.error]).map(esc).join(','));
       return;
     }
     if(!res.listings || res.listings.length===0){
-      lines.push(groupCols.concat(['', '', '', '', '', '', '', '', `일치 매물 없음 (전체 매칭 ${res.total_matching||0}건)`]).map(esc).join(','));
+      lines.push(groupCols.concat(['', '', '', '', '', '', '', '', '', '', '', `일치 매물 없음 (전체 매칭 ${res.total_matching||0}건)`]).map(esc).join(','));
       return;
     }
     res.listings.forEach(l=>{
       lines.push(groupCols.concat([
         l.marketplace_label || '',
+        l.item_location_country || '',
         l.title || '',
         l.condition || '',
+        l.is_auction ? '경매' : '',
         l.price,
         l.currency || '',
         l.usd_equiv != null ? l.usd_equiv : '',
         l.usd_equiv != null ? Math.round(l.usd_equiv*fx) : '',
         l.itemWebUrl || '',
+        (l.duplicate_marketplaces && l.duplicate_marketplaces.length) ? l.duplicate_marketplaces.join(' / ') : '',
         ''
       ]).map(esc).join(','));
     });
