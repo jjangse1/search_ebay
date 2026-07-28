@@ -33,7 +33,7 @@ import sqlite3
 import statistics
 import threading
 import webbrowser
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from datetime import datetime, timedelta
 
 import requests
@@ -141,6 +141,8 @@ app = Flask(__name__, static_folder=resource_path("static"), static_url_path="")
 # 업로드 파일 크기 상한 - Render 같은 메모리 적은(512MB) 서버에서 지나치게 큰 파일이
 # 올라와서 그대로 OOM(메모리 부족)으로 죽는 걸 방지. 상품 목록 엑셀 용도로는 30MB면 충분.
 app.config["MAX_CONTENT_LENGTH"] = 30 * 1024 * 1024
+# URL에서 엑셀을 가져올 때도 동일한 상한을 적용 (아래 parse_excel_url에서 재사용)
+MAX_XLSX_BYTES = app.config["MAX_CONTENT_LENGTH"]
 
 
 
@@ -310,6 +312,60 @@ REQUIRED_COLS = [
 ]
 
 
+def extract_rows_from_xlsx_file(tmp_path):
+    """디스크에 저장된 xlsx 파일 하나를 읽어서 (no_price_rows, priced_count)를
+    반환하는 공통 로직. 파일 업로드(parse_excel)와 URL 가져오기(parse_excel_url)가
+    이 함수 하나를 공유한다 - 파싱 로직이 두 곳에서 따로 관리되며 어긋나는 걸 방지.
+    컬럼 누락 등 형식 오류는 ValueError로 올려서 각 라우트가 자기 방식대로 처리한다.
+    """
+    no_price_rows = []
+    priced_count = 0
+
+    # read_only=True로 열어야 시트 전체를 셀 객체(서식/스타일 포함)로 메모리에 다
+    # 올리지 않고 행 단위로 필요한 만큼만 스트리밍해서 읽는다.
+    wb = load_workbook(tmp_path, read_only=True, data_only=True)
+    try:
+        ws = wb.active
+
+        header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
+        if header_row is None:
+            raise ValueError("빈 엑셀 파일입니다")
+        header = list(header_row)
+        missing = [c for c in REQUIRED_COLS if c not in header]
+        if missing:
+            raise ValueError(f"필수 컬럼이 없습니다: {missing}")
+        idx = {name: header.index(name) for name in header if name is not None}
+
+        row_id = 0
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            row_id += 1
+            part_no = row[idx["part_no"]]
+            if not part_no:
+                continue
+            try:
+                price = float(row[idx["product_price"]])
+            except (TypeError, ValueError):
+                price = None
+            disp = row[idx["price_display_yn"]]
+            if disp == "Y" and price is not None and price > 1:
+                # 가격 등록된 행은 목록에 안 쓰므로 개수만 세고 내용은 버린다
+                priced_count += 1
+                continue
+            no_price_rows.append({
+                "row_id": row_id,
+                "part_no": str(part_no),
+                "brand": row[idx["brand"]] or "",
+                "conditions": row[idx["conditions"]] or "",
+                "product_title": row[idx["product_title"]] or "",
+                "product_price": price,
+                "price_display_yn": disp,
+            })
+    finally:
+        wb.close()
+
+    return no_price_rows, priced_count
+
+
 @app.route("/api/parse-excel", methods=["POST"])
 def parse_excel():
     if "file" not in request.files:
@@ -322,8 +378,6 @@ def parse_excel():
     # 한 번에 메모리로 복사하지 않아도 되므로 큰 파일에서 메모리 사용량이 확 줄어든다.
     # ------------------------------------------------------------------
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
-    no_price_rows = []
-    priced_count = 0
     try:
         with os.fdopen(tmp_fd, "wb") as tmp:
             while True:
@@ -332,53 +386,10 @@ def parse_excel():
                     break
                 tmp.write(chunk)
 
-        # ------------------------------------------------------------------
-        # 메모리 절약 포인트 2: read_only=True로 열면 openpyxl이 시트 전체를
-        # 셀 객체(서식/스타일 포함)로 메모리에 다 올리지 않고, 행 단위로 필요한
-        # 만큼만 스트리밍해서 읽는다. 기본 모드(read_only=False)는 엑셀이 조금만
-        # 커도 메모리를 몇 배로 잡아먹어서 Render 같은 저메모리 환경에서 OOM이
-        # 나는 주된 원인이었다.
-        # ------------------------------------------------------------------
-        wb = load_workbook(tmp_path, read_only=True, data_only=True)
         try:
-            ws = wb.active
-
-            header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
-            if header_row is None:
-                return jsonify({"error": "빈 엑셀 파일입니다"}), 400
-            header = list(header_row)
-            missing = [c for c in REQUIRED_COLS if c not in header]
-            if missing:
-                return jsonify({"error": f"필수 컬럼이 없습니다: {missing}"}), 400
-            idx = {name: header.index(name) for name in header if name is not None}
-
-            row_id = 0
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                row_id += 1
-                part_no = row[idx["part_no"]]
-                if not part_no:
-                    continue
-                try:
-                    price = float(row[idx["product_price"]])
-                except (TypeError, ValueError):
-                    price = None
-                disp = row[idx["price_display_yn"]]
-                if disp == "Y" and price is not None and price > 1:
-                    # 가격 등록된 행은 목록에 안 쓰므로 개수만 세고 내용은 버린다
-                    # (예전엔 이 행들도 다 리스트에 쌓아뒀다가 개수만 리턴해서 낭비였음)
-                    priced_count += 1
-                    continue
-                no_price_rows.append({
-                    "row_id": row_id,
-                    "part_no": str(part_no),
-                    "brand": row[idx["brand"]] or "",
-                    "conditions": row[idx["conditions"]] or "",
-                    "product_title": row[idx["product_title"]] or "",
-                    "product_price": price,
-                    "price_display_yn": disp,
-                })
-        finally:
-            wb.close()
+            no_price_rows, priced_count = extract_rows_from_xlsx_file(tmp_path)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
     finally:
         try:
             os.remove(tmp_path)
@@ -390,6 +401,67 @@ def parse_excel():
         "no_price_count": len(no_price_rows),
         "priced_count": priced_count,
         "no_price_rows": no_price_rows,
+    })
+
+
+# ---------------------------------------------------------------------------
+# 1-B) URL에서 엑셀 가져오기 - "수동 업로드"를 대체. GitHub raw 링크처럼 항상 같은
+# 주소에 최신 상품 목록이 올라가 있는 경우, 매번 파일을 내려받아 첨부하는 대신
+# 그 URL만 넣으면 서버가 대신 다운로드해서 동일한 파싱 로직을 태운다.
+# ---------------------------------------------------------------------------
+ALLOWED_URL_SCHEMES = {"http", "https"}
+
+
+@app.route("/api/parse-excel-url", methods=["POST"])
+def parse_excel_url():
+    body = request.get_json(force=True, silent=True) or {}
+    url = (body.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "URL이 비어 있습니다"}), 400
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ALLOWED_URL_SCHEMES or not parsed.netloc:
+        return jsonify({"error": "http(s) URL만 지원합니다"}), 400
+
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
+    try:
+        try:
+            # stream=True로 받아서 헤더/청크 단계에서 용량을 체크 - 응답이 아주 크거나
+            # Content-Length를 속이는 서버라도 실제로 다운로드한 바이트 수 기준으로 컷.
+            resp = requests.get(url, stream=True, timeout=20, headers={"User-Agent": "myhubon-ebay-tool/1.0"})
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            return jsonify({"error": f"다운로드 실패: {e}"}), 400
+
+        total = 0
+        with os.fdopen(tmp_fd, "wb") as tmp:
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > MAX_XLSX_BYTES:
+                    return jsonify({"error": f"파일이 너무 큽니다 (최대 {MAX_XLSX_BYTES // (1024*1024)}MB)"}), 400
+                tmp.write(chunk)
+
+        try:
+            no_price_rows, priced_count = extract_rows_from_xlsx_file(tmp_path)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            # 확장자만 xlsx고 실제로는 xlsx가 아닌 응답(예: 404 HTML 페이지)이 온 경우 등
+            return jsonify({"error": f"엑셀 파일로 열 수 없습니다 (URL이 xlsx가 맞는지 확인하세요): {e}"}), 400
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        gc.collect()
+
+    return jsonify({
+        "no_price_count": len(no_price_rows),
+        "priced_count": priced_count,
+        "no_price_rows": no_price_rows,
+        "source_url": url,
     })
 
 
