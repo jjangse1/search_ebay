@@ -407,21 +407,24 @@ def parse_excel():
 # ---------------------------------------------------------------------------
 # 1-B) URL에서 엑셀 가져오기 - "수동 업로드"를 대체. GitHub raw 링크처럼 항상 같은
 # 주소에 최신 상품 목록이 올라가 있는 경우, 매번 파일을 내려받아 첨부하는 대신
-# 그 URL만 넣으면 서버가 대신 다운로드해서 동일한 파싱 로직을 태운다.
+# 서버가 대신 다운로드해서 동일한 파싱 로직을 태운다.
+#
+# 이 URL은 회사 내부 데이터 위치라 개인정보/보안 관점에서 브라우저(프론트엔드)에
+# 절대 노출되면 안 된다 - .env의 DEFAULT_XLSX_URL로만 관리하고, 클라이언트에는
+# "/api/parse-excel-default"라는 경로만 노출한다. 응답 JSON에도 URL 문자열 자체는
+# 절대 담지 않는다 (개발자도구 Network 탭에서 봐도 실제 주소가 안 보이게).
 # ---------------------------------------------------------------------------
 ALLOWED_URL_SCHEMES = {"http", "https"}
+DEFAULT_XLSX_URL = os.getenv("DEFAULT_XLSX_URL", "")
 
 
-@app.route("/api/parse-excel-url", methods=["POST"])
-def parse_excel_url():
-    body = request.get_json(force=True, silent=True) or {}
-    url = (body.get("url") or "").strip()
-    if not url:
-        return jsonify({"error": "URL이 비어 있습니다"}), 400
-
+def download_and_extract_xlsx(url):
+    """URL에서 xlsx를 다운로드해 (no_price_rows, priced_count)를 반환한다.
+    실패 시 ValueError를 올리며, 메시지에 원본 URL을 포함하지 않는다(로그/에러 응답에
+    내부 주소가 노출되지 않도록)."""
     parsed = urlparse(url)
     if parsed.scheme not in ALLOWED_URL_SCHEMES or not parsed.netloc:
-        return jsonify({"error": "http(s) URL만 지원합니다"}), 400
+        raise ValueError("잘못된 데이터 소스 설정입니다")
 
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
     try:
@@ -430,8 +433,8 @@ def parse_excel_url():
             # Content-Length를 속이는 서버라도 실제로 다운로드한 바이트 수 기준으로 컷.
             resp = requests.get(url, stream=True, timeout=20, headers={"User-Agent": "myhubon-ebay-tool/1.0"})
             resp.raise_for_status()
-        except requests.RequestException as e:
-            return jsonify({"error": f"다운로드 실패: {e}"}), 400
+        except requests.RequestException:
+            raise ValueError("데이터를 가져오지 못했습니다")
 
         total = 0
         with os.fdopen(tmp_fd, "wb") as tmp:
@@ -440,16 +443,16 @@ def parse_excel_url():
                     continue
                 total += len(chunk)
                 if total > MAX_XLSX_BYTES:
-                    return jsonify({"error": f"파일이 너무 큽니다 (최대 {MAX_XLSX_BYTES // (1024*1024)}MB)"}), 400
+                    raise ValueError(f"파일이 너무 큽니다 (최대 {MAX_XLSX_BYTES // (1024*1024)}MB)")
                 tmp.write(chunk)
 
         try:
-            no_price_rows, priced_count = extract_rows_from_xlsx_file(tmp_path)
-        except ValueError as e:
-            return jsonify({"error": str(e)}), 400
-        except Exception as e:
+            return extract_rows_from_xlsx_file(tmp_path)
+        except ValueError:
+            raise
+        except Exception:
             # 확장자만 xlsx고 실제로는 xlsx가 아닌 응답(예: 404 HTML 페이지)이 온 경우 등
-            return jsonify({"error": f"엑셀 파일로 열 수 없습니다 (URL이 xlsx가 맞는지 확인하세요): {e}"}), 400
+            raise ValueError("엑셀 파일 형식이 아닙니다")
     finally:
         try:
             os.remove(tmp_path)
@@ -457,11 +460,22 @@ def parse_excel_url():
             pass
         gc.collect()
 
+
+@app.route("/api/parse-excel-default", methods=["POST"])
+def parse_excel_default():
+    """프론트엔드가 URL을 전혀 모른 채 호출하는 엔드포인트. 실제 주소는 서버의
+    DEFAULT_XLSX_URL 환경변수에만 있고, 요청/응답 어디에도 노출되지 않는다."""
+    if not DEFAULT_XLSX_URL:
+        return jsonify({"error": "서버에 기본 데이터 URL이 설정되어 있지 않습니다 (.env의 DEFAULT_XLSX_URL 확인)"}), 400
+    try:
+        no_price_rows, priced_count = download_and_extract_xlsx(DEFAULT_XLSX_URL)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
     return jsonify({
         "no_price_count": len(no_price_rows),
         "priced_count": priced_count,
         "no_price_rows": no_price_rows,
-        "source_url": url,
     })
 
 
