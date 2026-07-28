@@ -172,6 +172,11 @@
       <div id="dropLabel">클릭하거나 파일을 끌어다 놓으세요</div>
       <input type="file" id="fileInput" accept=".xlsx">
     </div>
+    <div class="sub" style="margin:12px 0 6px;">또는 URL에서 바로 가져오기 (예: GitHub raw 링크) — 매번 파일을 첨부할 필요 없이 항상 최신 데이터를 이 주소에서 가져옵니다.</div>
+    <div class="quick-row">
+      <input type="text" id="excelUrlInput" placeholder="https://raw.githubusercontent.com/.../data.xlsx" value="https://raw.githubusercontent.com/jjangse1/ecommerce/main/scripts/data.xlsx">
+      <button class="primary" id="excelUrlBtn">최신 데이터 가져오기</button>
+    </div>
   </div>
 
   <div class="card">
@@ -643,6 +648,14 @@ fileInput.addEventListener('change', ()=>{
   if(fileInput.files.length) handleFile(fileInput.files[0]);
 });
 
+function applyParsedExcelData(data){
+  noPriceRows = noPriceRows.filter(r=>r.row_id < 0).concat(data.no_price_rows);
+  document.getElementById('noPriceCount').textContent = noPriceRows.length;
+  buildBrandChips();
+  renderRows();
+  document.getElementById('listCard').style.display = 'block';
+}
+
 async function handleFile(file){
   document.getElementById('dropLabel').textContent = '업로드 중... ' + file.name;
   const fd = new FormData();
@@ -652,15 +665,42 @@ async function handleFile(file){
     const data = await r.json();
     if(!r.ok){ alert('오류: ' + (data.error||'알 수 없는 오류')); return; }
     document.getElementById('dropLabel').textContent = `${file.name} 업로드 완료 (가격없음 ${data.no_price_count}건 / 가격있음 ${data.priced_count}건)`;
-    noPriceRows = noPriceRows.filter(r=>r.row_id < 0).concat(data.no_price_rows);
-    document.getElementById('noPriceCount').textContent = noPriceRows.length;
-    buildBrandChips();
-    renderRows();
-    document.getElementById('listCard').style.display = 'block';
+    applyParsedExcelData(data);
   }catch(e){
     alert('업로드 실패: ' + e.message);
   }
 }
+
+const excelUrlBtn = document.getElementById('excelUrlBtn');
+const excelUrlInput = document.getElementById('excelUrlInput');
+excelUrlBtn.addEventListener('click', ()=>fetchExcelFromUrl(false));
+excelUrlInput.addEventListener('keydown', (e)=>{ if(e.key === 'Enter') fetchExcelFromUrl(false); });
+
+async function fetchExcelFromUrl(silent){
+  const url = excelUrlInput.value.trim();
+  if(!url){ if(!silent) alert('URL을 입력하세요'); return; }
+  const originalLabel = excelUrlBtn.textContent;
+  excelUrlBtn.disabled = true;
+  excelUrlBtn.textContent = '가져오는 중...';
+  try{
+    const r = await fetch(API + '/api/parse-excel-url', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url})
+    });
+    const data = await r.json();
+    if(!r.ok){ if(!silent) alert('오류: ' + (data.error||'알 수 없는 오류')); return; }
+    document.getElementById('dropLabel').textContent = `URL에서 가져옴 (가격없음 ${data.no_price_count}건 / 가격있음 ${data.priced_count}건)`;
+    applyParsedExcelData(data);
+  }catch(e){
+    if(!silent) alert('가져오기 실패: ' + e.message);
+  }finally{
+    excelUrlBtn.disabled = false;
+    excelUrlBtn.textContent = originalLabel;
+  }
+}
+
+// 페이지를 열면 기본 데이터 URL에서 자동으로 한 번 가져온다 - 매번 클릭할 필요조차 없게.
+// 실패해도(오프라인, URL 변경 등) 조용히 무시하고 수동 버튼/업로드로 대체 가능하게 둔다.
+fetchExcelFromUrl(true);
 
 function buildBrandChips(){
   const counts = {};
